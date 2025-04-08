@@ -33,6 +33,7 @@ function simulate_nonlinear_MPC(nonlinear_problem, linear_problem, x₀₀, Σ�
         x_true = clamp.(x_true, 0.0, 1.0)
         y = measurement_dynamics(x_true) + sqrt(V) * randn(n)
         x₀₀, Σ₀₀ = update(x₀₀, Σ₀₀, u, y, eKF, mode = "measurement")
+        x₀₀ = clamp.(x₀₀, 0.0, 1.0)
     end
     return X_rec, U_rec, Σ_rec, X_true_rec
 end
