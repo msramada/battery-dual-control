@@ -1,6 +1,6 @@
 using Revise
 using Plots, LinearAlgebra
-
+#import Pkg; Pkg.add("MadNLP")
 # calculate LQR cost:
 η = 1 # Efficiency
 Q_nom = 2.2 # Nominal capacity
@@ -35,7 +35,7 @@ include("./src/eKF.jl")
 
 eKF = ExtendedKalmanFilter(state_dynamics, measurement_dynamics, W, V)
 
-N = 8 # prediction horizon length
+N = 6 # prediction horizon length
 Q = 1.0
 R = 0.1
 set_point = 0.7
@@ -81,11 +81,11 @@ nonlinear_problem = MPC_Prob(
 )
 x₀₀ = [0.2; 0.2]
 Σ₀₀ = 0.1 * Matrix{Float64}(I, 2, 2)
-L = 10
-num_simulations = 10
+L = 1 # number of candidate trajectories
+num_simulations = 1
 cost_rec = zeros(num_simulations)
 est_err_rec = zeros(num_simulations)
-T = 50
+T = 5
 function simulation_run()
     X_rec, U_rec, _, X_true_rec = simulate_nonlinear_MPC(nonlinear_problem, linear_problem,
                                                         x₀₀, Σ₀₀, T, L; u_noise_cov = 0.01)
