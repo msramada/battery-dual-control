@@ -5,7 +5,6 @@ function simulate_nonlinear_MPC(nonlinear_problem, linear_problem, x₀₀, Σ�
     x_true = x₀₀ + sqrt(Σ₀₀) * randn(n)
     x_true = clamp.(x_true, 0.0, 1.0)
     candidate_Us = [zeros(m, N-1) for _ in 1:L]
-    candidate_Xs = [zeros(n, N) for _ in 1:L]
     X_rec = [x₀₀ for _ in 1:T]
     U_rec = [x₀₀ for _ in 1:T]
     Σ_rec = [Σ₀₀ for _ in 1:T]
@@ -17,15 +16,14 @@ function simulate_nonlinear_MPC(nonlinear_problem, linear_problem, x₀₀, Σ�
         X_true_rec[k] = x_true
         for j in 1:L
             if j == 1
-                candidate_Us[1], candidate_Xs[1] = linear_mpc(x₀₀, linear_problem)
+                candidate_Us[1] = linear_mpc(x₀₀, linear_problem)
             else
                 x_candidate = x₀₀ + sqrt(Σ₀₀) * randn(n)
                 x_candidate = clamp.(x_candidate, 0.0, 1.0)
-                candidate_Us[j], candidate_Xs[j] = linear_mpc(x_candidate, linear_problem)# + sqrt(u_noise_cov) .* randn(m, N-1)
+                candidate_Us[j] = linear_mpc(x_candidate, linear_problem) + sqrt(u_noise_cov) .* randn(m, N-1)
             end
         end
-        candidate_solns = (candidate_Us, candidate_Xs)
-        u, any_feasibility = trajectory_pick(nonlinear_problem, candidate_solns, x₀₀, Σ₀₀)
+        u, any_feasibility = trajectory_pick(nonlinear_problem, candidate_Us, x₀₀, Σ₀₀)
         if !any_feasibility
             println("Nonlinear MPC cannot find feasible trajectory")
             u = candidate_Us[1][:, 1]
@@ -40,9 +38,8 @@ function simulate_nonlinear_MPC(nonlinear_problem, linear_problem, x₀₀, Σ�
 end
 
 
-function trajectory_pick(prob::MPC_Prob, candidate_solns::Tuple{Vector{Matrix{Float64}}, Vector{Matrix{Float64}}}, 
+function trajectory_pick(prob::MPC_Prob, u_trajectories::Vector{Matrix{Float64}}, 
     x₀₀::Vector{Float64}, Σ₀₀::Matrix{Float64})
-    u_trajectories, x_trajectories = candidate_solns
     initial_state = (x₀₀, Σ₀₀)
     L = size(u_trajectories, 1)
     costs = zeros(L,)
@@ -50,14 +47,24 @@ function trajectory_pick(prob::MPC_Prob, candidate_solns::Tuple{Vector{Matrix{Fl
     n = prob.n
     for i = 1:L
         initial_u_guess = u_trajectories[i]
-        initial_x_guess = x_trajectories[i]
-        optimal_u, obj, feasibility = nonlinear_mpc(initial_state, prob, initial_u_guess, initial_x_guess)
-        optimal_Us[i] = optimal_u[:, 1]
+        optimal_u = nonlinear_mpc(initial_state, prob, initial_u_guess)
+        # calculate the actual cost and feasibility
+        info_state = [x₀₀; vec(Σ₀₀)]
+        obj = 0
+        feasibility = true
+        for k in 1:prob.N-1
+            u₀ = optimal_u[:, k]
+            obj += prob.runningcost(info_state, u₀)
+            feasibility = feasibility && all(prob.constraint_function(info_state, u₀) .<= 0.0)
+            info_state = prob.f(info_state, u₀)
+        end
+        feasibility = feasibility && all(prob.constraint_function(info_state, 0) .<= 0.0)
         if feasibility
             costs[i] = obj
         else
             costs[i] = Inf
         end
+        optimal_Us[i] = optimal_u[:, 1]
     end
     any_feasibility = any(costs .< Inf)
     min_cost_index = argmin(costs)
@@ -78,7 +85,7 @@ function simulate_mpc(lin_prob::MPC_Prob, x₀₀, Σ₀₀, T)
         X_rec_mpc[k] = x₀₀
         Σ_rec_mpc[k] = Σ₀₀
         X_true_rec_mpc[k] = x_true
-        U = linear_mpc(x₀₀, lin_prob)[1]
+        U = linear_mpc(x₀₀, lin_prob)
         u = U[:,1]
         U_rec_mpc[k] = u
         x_true = state_dynamics(x_true, u) + sqrt(W) * randn(n)

@@ -22,11 +22,6 @@ function measurement_dynamics(SOC)
     return [OCV_LTO; OCV_LCO]
 end
 
-function measurement_dynamics_jacobian(SOC)
-    d_OCV_LTO = [0.3 + 0.8 * sech(8 * (SOC[1] - 0.5))^2 + 0.25 * π * cos(5 * π * SOC[1]); 0.0]
-    d_OCV_LCO = [0.0; 0.5 + 0.6 * π * cos(2 * π * SOC[2])]
-    return hcat(d_OCV_LTO, d_OCV_LCO)
-end
 
 W = 0.1 * [1.0 0.0; 0.0 1.0]
 V = 0.1 * [1.0 0.0; 0.0 1.0];
@@ -35,12 +30,18 @@ include("./src/eKF.jl")
 
 eKF = ExtendedKalmanFilter(state_dynamics, measurement_dynamics, W, V)
 
-N = 6 # prediction horizon length
+N = 8 # prediction horizon length
 Q = 1.0
 R = 0.1
 set_point = 0.7
 running_cost = (x, u) -> Q * (sum(x) - set_point)^2  + u' * R * u
-running_cost_stochastic = (x, cov, u) -> Q * (sum(x) - set_point)^2 + Q * tr(cov) + u' * R * u
+n = 2 # state dimension
+function running_cost_stochastic(info_state, u)
+    x = info_state[1:n]
+    Σ = info_state[n+1:end]
+    Σ = reshape(Σ, n, n)
+    return Q * (sum(x) - set_point)^2 + Q * tr(Σ) + u' * R * u
+end
 
 include("./src/MPCs.jl")
 include("./simulate.jl")
@@ -61,17 +62,26 @@ linear_problem = MPC_Prob(
     constraint_function
 )
 
-# information state typically refers to the density or anything that represents the state
-# and its uncertainty
-function time_update_func(x₀₀, Σ₀₀, u₀)
-    x₁₀, Σ₁₀ = time_update_predict(x₀₀, Σ₀₀, u₀, eKF)
-    return x₁₀, Σ₁₀
+
+function info_f(info_state, u₀)
+    x₀₀ = info_state[1:n]
+    Σ₀₀ = info_state[n+1:end]
+    Σ₀₀ = reshape(Σ₀₀, n, n)
+    x₁₁, Σ₁₁ = update_predict(x₀₀, Σ₀₀, u₀, eKF)
+    Σ₁₁ = vec(Σ₁₁)
+    return [x₁₁; Σ₁₁]
 end
 
-del_h = x -> ∇h(x, eKF)
+function constraint_function_stochastic(x, u)
+    u_max = 5.0
+    x = x[1:n]
+    return [-x; x .- 1; u .- u_max; -u .- u_max]
+end
+
+
 
 nonlinear_problem = MPC_Prob(
-    time_update_func, #measurement update will be done within JuMP to avoid the matrix inversion
+    info_f, #measurement update will be done within JuMP to avoid the matrix inversion
     2, # state dimension
     2, # control dimension
     2, # output dimension
@@ -81,11 +91,11 @@ nonlinear_problem = MPC_Prob(
 )
 x₀₀ = [0.2; 0.2]
 Σ₀₀ = 0.1 * Matrix{Float64}(I, 2, 2)
-L = 1 # number of candidate trajectories
-num_simulations = 1
+L = 10 # number of candidate trajectories
+num_simulations = 20
 cost_rec = zeros(num_simulations)
 est_err_rec = zeros(num_simulations)
-T = 5
+T = 50
 function simulation_run()
     X_rec, U_rec, _, X_true_rec = simulate_nonlinear_MPC(nonlinear_problem, linear_problem,
                                                         x₀₀, Σ₀₀, T, L; u_noise_cov = 0.01)

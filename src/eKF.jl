@@ -18,13 +18,11 @@ end
 
 
 function ∇f(x₀::Vector, u₀::Vector, eKF::ExtendedKalmanFilter)
-	#ForwardDiff.jacobian(x -> eKF.f(x, u₀), x₀)
-	return A
+	ForwardDiff.jacobian(x -> eKF.f(x, u₀), x₀)
 end
 
 function ∇h(x₀::Vector, eKF::ExtendedKalmanFilter)
-	#ForwardDiff.jacobian(x -> eKF.h(x), x₀)
-	return measurement_dynamics_jacobian(x₀)
+	ForwardDiff.jacobian(x -> eKF.h(x), x₀)
 end
 
 
@@ -68,4 +66,10 @@ function measurement_update_predict(x₁₀, Σ₁₀, eKF::ExtendedKalmanFilter
 	x₁₁ = x₁₀
 	Σ₁₁ = (Matrix{Float64}(I, size(eKF.W)) - L * H) * Σ₁₀
 	return x₁₁, Σ₁₁
+end
+
+function update_predict(x₀₀::Vector, Σ₀₀::Matrix, u₀::Vector, eKF::ExtendedKalmanFilter)
+x₁₀, Σ₁₀ = time_update(x₀₀, Σ₀₀, u₀, eKF)
+x₁₁, Σ₁₁ = measurement_update_predict(x₁₀, Σ₁₀, eKF)
+return x₁₁, Σ₁₁
 end
