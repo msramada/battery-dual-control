@@ -1,5 +1,6 @@
 using Revise
 using Plots, LinearAlgebra
+#import Pkg; Pkg.add("JuMP"); Pkg.add("Ipopt")
 #import Pkg; Pkg.add("MadNLP")
 # calculate LQR cost:
 η = 1 # Efficiency
@@ -33,14 +34,32 @@ eKF = ExtendedKalmanFilter(state_dynamics, measurement_dynamics, W, V)
 N = 8 # prediction horizon length
 Q = 1.0
 R = 0.1
-set_point = 0.7
-running_cost = (x, u) -> Q * (sum(x) - set_point)^2  + u' * R * u
+set_point = 0.8
 n = 2 # state dimension
+
+function running_cost(x, u)
+    cost = Q * (sum(x) - set_point) ^ 2  + u' * R * u
+    # penalize the difference between SOCs
+    for i in 1:n
+        for j in i+1:n
+            cost += Q * (x[i] - x[j])^2
+        end
+    end
+    return cost
+end
+
 function running_cost_stochastic(info_state, u)
     x = info_state[1:n]
     Σ = info_state[n+1:end]
     Σ = reshape(Σ, n, n)
-    return Q * (sum(x) - set_point)^2 + Q * tr(Σ) + u' * R * u
+    cost = running_cost(x, u) + Q * tr(Σ)
+    # penalize the difference between SOCs
+    for i in 1:n
+        for j in i+1:n
+            cost += Q * (Σ[i, i] - 2 * Σ[i, j] + Σ[j, j])
+        end
+    end
+    return cost
 end
 
 include("./src/MPCs.jl")
@@ -89,9 +108,10 @@ nonlinear_problem = MPC_Prob(
     running_cost_stochastic,
     constraint_function
 )
-x₀₀ = [0.2; 0.2]
-Σ₀₀ = 0.1 * Matrix{Float64}(I, 2, 2)
-L = 10 # number of candidate trajectories
+
+x₀₀ = rand(2)
+Σ₀₀ = rand(2,2) .* Matrix{Float64}(I, 2, 2)
+L = 1 # number of candidate trajectories
 num_simulations = 20
 cost_rec = zeros(num_simulations)
 est_err_rec = zeros(num_simulations)

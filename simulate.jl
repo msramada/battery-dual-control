@@ -20,7 +20,7 @@ function simulate_nonlinear_MPC(nonlinear_problem, linear_problem, x₀₀, Σ�
             else
                 x_candidate = x₀₀ + sqrt(Σ₀₀) * randn(n)
                 x_candidate = clamp.(x_candidate, 0.0, 1.0)
-                candidate_Us[j] = linear_mpc(x_candidate, linear_problem) + sqrt(u_noise_cov) .* randn(m, N-1)
+                candidate_Us[j] = linear_mpc(x_candidate, linear_problem) + sqrt(tr(Σ₀₀)) .* randn(m, N-1)
             end
         end
         u, any_feasibility = trajectory_pick(nonlinear_problem, candidate_Us, x₀₀, Σ₀₀)
@@ -33,7 +33,6 @@ function simulate_nonlinear_MPC(nonlinear_problem, linear_problem, x₀₀, Σ�
         x_true = clamp.(x_true, 0.0, 1.0)
         y = measurement_dynamics(x_true) + sqrt(V) * randn(n)
         x₀₀, Σ₀₀ = update(x₀₀, Σ₀₀, u, y, eKF, mode = "measurement")
-        x₀₀ = clamp.(x₀₀, 0.0, 1.0)
     end
     return X_rec, U_rec, Σ_rec, X_true_rec
 end
@@ -48,18 +47,7 @@ function trajectory_pick(prob::MPC_Prob, u_trajectories::Vector{Matrix{Float64}}
     n = prob.n
     for i = 1:L
         initial_u_guess = u_trajectories[i]
-        optimal_u = nonlinear_mpc(initial_state, prob, initial_u_guess)
-        # calculate the actual cost and feasibility
-        info_state = [x₀₀; vec(Σ₀₀)]
-        obj = 0
-        feasibility = true
-        for k in 1:prob.N-1
-            u₀ = optimal_u[:, k]
-            obj += prob.runningcost(info_state, u₀)
-            feasibility = feasibility && all(prob.constraint_function(info_state, u₀) .<= 0.0)
-            info_state = prob.f(info_state, u₀)
-        end
-        feasibility = feasibility && all(prob.constraint_function(info_state, 0) .<= 0.0)
+        optimal_u, obj, feasibility = nonlinear_mpc(initial_state, prob, initial_u_guess)
         if feasibility
             costs[i] = obj
         else
