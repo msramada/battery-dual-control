@@ -23,7 +23,7 @@ function simulate_nonlinear_MPC(nonlinear_problem, linear_problem, x₀₀, Σ�
                 candidate_Us[j] = linear_mpc(x_candidate, linear_problem) + sqrt(tr(Σ₀₀)) .* randn(m, N-1)
             end
         end
-        u, any_feasibility = trajectory_pick(nonlinear_problem, candidate_Us, x₀₀, Σ₀₀)
+        u, any_feasibility = trajectory_pick(linear_problem, nonlinear_problem, candidate_Us, x₀₀, Σ₀₀)
         if !any_feasibility
             println("Nonlinear MPC cannot find feasible trajectory")
             u = candidate_Us[1][:, 1]
@@ -38,18 +38,29 @@ function simulate_nonlinear_MPC(nonlinear_problem, linear_problem, x₀₀, Σ�
 end
 
 
-function trajectory_pick(prob::MPC_Prob, u_trajectories::Vector{Matrix{Float64}}, 
+function trajectory_pick(linear_mpc::MPC_Prob, prob::MPC_Prob, u_trajectories::Vector{Matrix{Float64}}, 
     x₀₀::Vector{Float64}, Σ₀₀::Matrix{Float64})
     initial_state = (x₀₀, Σ₀₀)
     L = size(u_trajectories, 1)
     costs = zeros(L,)
     optimal_Us = [zeros(prob.m) for _ in 1:L]
     n = prob.n
-    for i = 1:L
+    Σ₀₀_vec = vec(Σ₀₀)
+
+    Threads.@threads for i = 1:L
+        info_state0 = [x₀₀; Σ₀₀_vec]
         initial_u_guess = u_trajectories[i]
         optimal_u, obj, feasibility = nonlinear_mpc(initial_state, prob, initial_u_guess)
         if feasibility
-            costs[i] = obj
+            for k in 1:prob.N-1
+                costs[i] += prob.runningcost(info_state0, optimal_u[:, k])/L
+                info_state0 = prob.f(info_state0, optimal_u[:, k])
+                # x₁ = info_state0[1:n]
+                # costs[i] += linear_mpc.runningcost(x₁, optimal_u[:, k])/L
+            end
+            costs[i] += linear_mpc.runningcost(info_state0, 0.0)/L
+            # costs[i] += prob.runningcost(info_state0, 0.0)/L
+            # costs[i] = obj
         else
             costs[i] = Inf
         end

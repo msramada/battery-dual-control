@@ -1,50 +1,68 @@
+
 using Revise
 using Plots, LinearAlgebra
-#import Pkg; Pkg.add("JuMP"); Pkg.add("Ipopt")
-#import Pkg; Pkg.add("MadNLP")
-# calculate LQR cost:
+using JLD2
+using JuMP, Ipopt, MadNLP
+
+include("./src/eKF.jl")
+include("./src/MPCs.jl")
+include("./simulate.jl")
+
+n = 3  # state dimension
+m = 3 # control dimension
+d = 3 # output dimension
+
 η = 1 # Efficiency
 Q_nom = 2.2 # Nominal capacity
 dt = 1.0 # Discretization time
-A = [1.0 0.0; 0.0 1.0]
-B = dt * η / Q_nom * [1.0 0; 0 1.0]
+A = I(n)
+B = dt * η / Q_nom * I(m)
 
 function state_dynamics(SOC, I)
-    SOC = A * SOC .+ B * I
-    #SOC = clamp.(SOC, 0.0, 1.0)
+    SOC = A * SOC + B * I
     return SOC
 end
 
 function measurement_dynamics(SOC)
-    # LTO
-    OCV_LTO = 2.5 + 0.3 * SOC[1] + 0.1 * tanh(8 * (SOC[1] - 0.5)) + 0.05 * sin(5 * π * SOC[1])   
-    # LCO
-    OCV_LCO = 3.7 + 0.5 * SOC[2] + 0.3 * sin(2 * π * SOC[2])
-    return [OCV_LTO; OCV_LCO]
+
+    # Li-ion from Wang et al. 2021,
+    "Lithium-Ion Battery SOC Estimation Based on Adaptive Forgetting Factor Least Squares Online Identification and Unscented Kalman Filter"
+    OCV_Li = -43.1 * SOC[1]^6 + 155.4 * SOC[1]^5 - 215.7 * SOC[1]^4 + 146.6 * SOC[1]^3 - 50.16 * SOC[1]^2 + 8.674 * SOC[1] + 2.991
+
+    # From Stroe et al. 2018
+    "Influence of Battery Parametric Uncertainties on the State-of-Charge Estimation of Lithium Titanate Oxide-Based Batteries"
+    OCV_LTO = 2.0301 + 2.1737*SOC[2] - 13.65 * SOC[2]^2 + 31.77 * SOC[2]^3 + 39.06*SOC[2]^4 - 329.2*SOC[2]^5 + 632.1*SOC[2]^6 - 526.2*SOC[2]^7 + 164.8*SOC[2]^8 
+
+    # From Propp et al. 2017
+    "Kalman-variant estimators for state of charge in lithium-sulfur batteries"
+    OCV_LiS = 2.1 + 0.48*SOC[3] -8.36*SOC[3]^2 + 72.94*SOC[3]^3 - 364.76*SOC[3]^4 + 1107.76*SOC[3]^5 - 2066.02*SOC[3]^6 + 2291.23*SOC[3]^7 - 1372.71*SOC[3]^8 + 339.78*SOC[3]^9
+
+   return [OCV_Li; OCV_LTO; OCV_LiS]
 end
 
 
-W = 0.1 * [1.0 0.0; 0.0 1.0]
-V = 0.1 * [1.0 0.0; 0.0 1.0];
+W = 0.1 * I(n) # process noise covariance
+V = 0.1 * I(d); # measurement noise covariance
 
-include("./src/eKF.jl")
+
 
 eKF = ExtendedKalmanFilter(state_dynamics, measurement_dynamics, W, V)
 
 N = 8 # prediction horizon length
 Q = 1.0
 R = 0.1
-set_point = 0.8
-n = 2 # state dimension
+set_point = 1.0
+
 
 function running_cost(x, u)
     cost = Q * (sum(x) - set_point) ^ 2  + u' * R * u
     # penalize the difference between SOCs
     for i in 1:n
         for j in i+1:n
-            cost += Q * (x[i] - x[j])^2
+            cost += (Q * (x[i] - x[j])^2)^2
         end
     end
+
     return cost
 end
 
@@ -62,8 +80,7 @@ function running_cost_stochastic(info_state, u)
     return cost
 end
 
-include("./src/MPCs.jl")
-include("./simulate.jl")
+
 
 function constraint_function(x, u)
     u_max = 5.0
@@ -73,9 +90,9 @@ end
 # Define the linear problem
 linear_problem = MPC_Prob(
     state_dynamics,
-    2, # state dimension
-    2, # control dimension
-    2, # output dimension
+    n, # state dimension
+    m, # control dimension
+    d, # output dimension
     N, # prediction horizon
     running_cost,
     constraint_function
@@ -101,59 +118,111 @@ end
 
 nonlinear_problem = MPC_Prob(
     info_f, #measurement update will be done within JuMP to avoid the matrix inversion
-    2, # state dimension
-    2, # control dimension
-    2, # output dimension
+    n, # state dimension
+    m, # control dimension
+    d, # output dimension
     N, # prediction horizon
     running_cost_stochastic,
     constraint_function
 )
 
-x₀₀ = rand(2)
-Σ₀₀ = rand(2,2) .* Matrix{Float64}(I, 2, 2)
-L = 1 # number of candidate trajectories
-num_simulations = 20
-cost_rec = zeros(num_simulations)
-est_err_rec = zeros(num_simulations)
+x₀₀ = ones(n)*0.05
+Σ₀₀ = 0.5 .* Matrix{Float64}(I, n, n)
+L = 35 # number of candidate trajectories
+num_simulations = 100
 T = 50
+
+
+
 function simulation_run()
-    X_rec, U_rec, _, X_true_rec = simulate_nonlinear_MPC(nonlinear_problem, linear_problem,
+    X_rec, U_rec, Σ_rec, X_true_rec = simulate_nonlinear_MPC(nonlinear_problem, linear_problem,
                                                         x₀₀, Σ₀₀, T, L; u_noise_cov = 0.01)
     achieved_cost = sum([running_cost(X_true_rec[k], U_rec[k]) for k in 1:T]) / T
     achieved_est_err = sum([norm(X_rec[k] - X_true_rec[k]) for k in 1:T]) / T
-    return achieved_cost, achieved_est_err
+    return achieved_cost, achieved_est_err, X_rec, U_rec, Σ_rec, X_true_rec
 end
 
-for i in 1:num_simulations
-    println("Simulation: ", i)
-    if i==num_simulations
-        @time begin
-        achieved_cost, achieved_est_err = simulation_run()
+
+function run_nonlinear_mpcs()
+    cost_rec = zeros(num_simulations)
+    est_err_rec = zeros(num_simulations)
+    x_rec = Vector{Vector{Vector{Float64}}}(undef, num_simulations) 
+    u_rec = Vector{Vector{Vector{Float64}}}(undef, num_simulations) 
+    x_true_rec = Vector{Vector{Vector{Float64}}}(undef, num_simulations)  
+    cov_rec = Vector{Vector{Matrix{Float64}}}(undef, num_simulations) 
+
+
+    for i in 1:num_simulations
+        println("Simulation: ", i)
+        if i==num_simulations
+            @time begin
+            achieved_cost, achieved_est_err, X_rec, U_rec, Σ_rec, X_true_rec = simulation_run()
+            end
+        else
+            achieved_cost, achieved_est_err, X_rec, U_rec, Σ_rec, X_true_rec = simulation_run()
         end
-    else
-        achieved_cost, achieved_est_err = simulation_run()
+        cost_rec[i] = achieved_cost
+        est_err_rec[i] = achieved_est_err
+        x_rec[i] = X_rec
+        u_rec[i] = U_rec
+        x_true_rec[i] = X_true_rec
+        cov_rec[i] = Σ_rec
     end
-    cost_rec[i] = achieved_cost
-    est_err_rec[i] = achieved_est_err
-end
-println("Average Achieved Cost: ", sum(cost_rec) / num_simulations)
-println("Average Achieved Estimation Error: ", sum(est_err_rec) / num_simulations)
+    println("Average Achieved Cost: ", sum(cost_rec) / num_simulations)
+    println("Average Achieved Estimation Error: ", sum(est_err_rec) / num_simulations)
 
-cost_rec_mpc = zeros(num_simulations)
-est_err_rec_mpc = zeros(num_simulations)
+    return cost_rec, est_err_rec, x_rec, u_rec, x_true_rec, cov_rec
+end
+
+
+
 function simulate_run_mpc()
-    X_rec_mpc, U_rec_mpc, _, X_true_rec_mpc = simulate_mpc(linear_problem, x₀₀, Σ₀₀, T)
+    X_rec_mpc, U_rec_mpc, Σ_rec_mpc, X_true_rec_mpc = simulate_mpc(linear_problem, x₀₀, Σ₀₀, T)
     achieved_cost = sum([running_cost(X_true_rec_mpc[k], U_rec_mpc[k]) for k in 1:T]) / T
     achieved_est_err = sum([norm(X_rec_mpc[k] - X_true_rec_mpc[k]) for k in 1:T]) / T
-    return achieved_cost, achieved_est_err 
+    return achieved_cost, achieved_est_err, X_rec_mpc, U_rec_mpc, Σ_rec_mpc, X_true_rec_mpc 
 end
-for i in 1:num_simulations
-    achieved_cost, achieved_est_err = simulate_run_mpc()
-    cost_rec_mpc[i] = achieved_cost
-    est_err_rec_mpc[i] = achieved_est_err
-end
-println("Average Achieved Cost: ", sum(cost_rec_mpc) / num_simulations)
-println("Average Achieved Estimation Error: ", sum(est_err_rec_mpc) / num_simulations)
 
-println("Average Achieved Cost Change: % ", (sum(cost_rec)-sum(cost_rec_mpc)) / sum(cost_rec_mpc) * 100)
-println("Average Achieved Estimation Error Change: % ", (sum(est_err_rec) - sum(est_err_rec_mpc)) / sum(est_err_rec_mpc) * 100)
+
+function run_linear_mpcs()
+
+    cost_rec_mpc = zeros(num_simulations)
+    est_err_rec_mpc = zeros(num_simulations)
+    x_rec_mpc = Vector{Vector{Vector{Float64}}}(undef, num_simulations) 
+    u_rec_mpc = Vector{Vector{Vector{Float64}}}(undef, num_simulations) 
+    x_true_rec_mpc = Vector{Vector{Vector{Float64}}}(undef, num_simulations)  
+    cov_rec_mpc = Vector{Vector{Matrix{Float64}}}(undef, num_simulations)
+
+    for i in 1:num_simulations
+        achieved_cost, achieved_est_err, X_rec_mpc, U_rec_mpc, Σ_rec_mpc, X_true_rec_mpc = simulate_run_mpc()
+        cost_rec_mpc[i] = achieved_cost
+        est_err_rec_mpc[i] = achieved_est_err
+        x_rec_mpc[i] = X_rec_mpc
+        u_rec_mpc[i] = U_rec_mpc
+        x_true_rec_mpc[i] = X_true_rec_mpc
+        cov_rec_mpc[i] = Σ_rec_mpc
+    end
+    println("Average Achieved Cost: ", sum(cost_rec_mpc) / num_simulations)
+    println("Average Achieved Estimation Error: ", sum(est_err_rec_mpc) / num_simulations)
+    
+    return cost_rec_mpc, est_err_rec_mpc, x_rec_mpc, u_rec_mpc, x_true_rec_mpc, cov_rec_mpc
+end
+
+RUN_SIMS = false
+
+if RUN_SIMS
+    println("Running nonlinear MPC simulations...")
+    cost_rec, est_err_rec, x_rec, u_rec, x_true_rec, cov_rec = run_nonlinear_mpcs()
+    println("Running linear MPC simulations...")
+    cost_rec_mpc, est_err_rec_mpc, x_rec_mpc, u_rec_mpc, x_true_rec_mpc, cov_rec_mpc = run_linear_mpcs()
+
+    println("Average Achieved Cost Change: % ", (sum(cost_rec) - sum(cost_rec_mpc)) / sum(cost_rec_mpc) * 100)
+    println("Average Achieved Estimation Error Change: % ", (sum(est_err_rec) - sum(est_err_rec_mpc)) / sum(est_err_rec_mpc) * 100)
+
+    SAVE_DATA = true
+    if SAVE_DATA
+        @save "simulation_results.jld2" x_rec u_rec cov_rec x_true_rec cost_rec est_err_rec x_rec_mpc u_rec_mpc cov_rec_mpc x_true_rec_mpc cost_rec_mpc est_err_rec_mpc
+    end
+end
+
+
