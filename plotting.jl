@@ -46,7 +46,9 @@ end
 
 
 
-
+algo_name = "Algorithm 1"
+nominal_name = "Linear MPC"
+fontSize=13
 ### Use to plot histograms of cost and estimation error to compare both methods
 function histograms()
     # # Create a 2x2 layout for the subplots
@@ -80,47 +82,61 @@ function histograms()
     # Individual histograms with vertical dashed lines for means
     p1 = histogram(est_err_rec, 
         bins=bins_estimation, 
-        label="nonlinear MPC", 
+        label=algo_name, 
         color=:blue, 
         xlabel="Estimation Error", 
         ylabel="Frequency",
         legend=:topright)
     vline!(p1, [mean_nonlinearMPC_cov], label="Mean", color=:red, linestyle=:dash, linewidth=1.5)
-    ylims!(0.0,50)
+    ylims!(0.0,30)
 
     p2 = histogram(est_err_rec_mpc, 
         bins=bins_estimation, 
-        label="linear MPC", 
+        label=nominal_name, 
         color=:green, 
         xlabel="Estimation Error", 
         ylabel="Frequency",
         legend=:topright)
     vline!(p2, [mean_linearMPC_cov], label="Mean", color=:red, linestyle=:dash, linewidth=1.5)
-    ylims!(0.0,50)
+    ylims!(0.0,30)
 
 
     p3 = histogram(nonlinearMPC_cost, 
         bins=bins_cost, 
-        label="nonlinear MPC", 
+        label=algo_name, 
         color=:blue, 
         xlabel="Cost", 
         ylabel="Frequency")
     vline!(p3, [mean_nonlinearMPC_cost], label="Mean", color=:red, linestyle=:dash,linewidth=1.5)
-    ylims!(0.0,25)
+    ylims!(0.0,30)
 
     p4 = histogram(linearMPC_cost, 
         bins=bins_cost, 
-        label="linear MPC", 
+        label=nominal_name, 
         color=:green, 
         xlabel="Cost", 
         ylabel="Frequency")
     vline!(p4, [mean_linearMPC_cost], label="Mean", color=:red, linestyle=:dash,linewidth=1.5)
-    ylims!(0.0,25)
+    ylims!(0.0,30)
 
-    plot(p1, p3, p2, p4,
+    plot(p2, p4, p1, p3,
         layout=plot_layout, 
         legend=:topright,
-        legendfontsize=7)
+        legendfontsize=12)
+
+    plot!(
+        framestyle = :box,
+        yguidefontsize = fontSize,
+        xguidefontsize = fontSize,
+        xlabelfontsize = fontSize,
+        ylabelfontsize = fontSize,
+        xtickfontsize = 8,
+        ytickfontsize = 8,
+        palette = :seaborn_muted,
+        foreground_color_legend = nothing,
+        legendfontsize=fontSize-1,
+        fontfamily = "Computer Modern");
+
     savefig("./histograms.png")
 
     # plot(p2,p4,
@@ -143,29 +159,50 @@ function plot_OCV_SOC()
     # Plot each OCV-SOC curve
     plot(
         SOC_range, OCV_values[1, :], 
-        label="Lithium-Ion, Wang", 
+        label="Lithium-Ion", 
         linewidth=2, 
         linestyle=:solid, 
         color=:blue
     )
     plot!(
         SOC_range, OCV_values[2, :], 
-        label="LTO", 
+        label="Lithium Titanate Oxide", 
         linewidth=2, 
         linestyle=:dash, 
         color=:red
     )
     plot!(
         SOC_range, OCV_values[3, :], 
-        label="LiS",
+        label="Lithium Sulfur",
         linewidth=2, 
         linestyle=:dot, 
-        color=:green
+        color=:green,
+        size=(650,250),
+        legendfontsize=11,
+        left_margin=5Plots.mm,
+        bottom_margin=5Plots.mm,
+        top_margin=5Plots.mm,
+        legend_position=(0.15,0.85)
     )
 
-    xlabel!("State of Charge (SOC)")
-    ylabel!("Open Circuit Voltage (OCV)")
+    xlabel!("SOC")
+    ylabel!("OCV (up to additive constant)")
     # Save the plot
+
+    plot!(
+        framestyle = :box,
+        yguidefontsize = fontSize,
+        xguidefontsize = fontSize,
+        xtickfontsize = 8,
+        ytickfontsize = 8,
+        xlabelfontsize = fontSize,
+        ylabelfontsize = fontSize,
+        palette = :seaborn_muted,
+        foreground_color_legend = nothing,
+        legendfontsize=fontSize-1,
+        fontfamily = "Computer Modern",
+        xlabel = "SOC",
+        ylabel = "OCV",);
     savefig("./OCV.png")
 end
 
@@ -233,28 +270,49 @@ function compare_covariance_trace()
     p1 = histogram(
         nonlinearMPC_cov, 
         bins=bins_nonlinear, 
-        label="nonlinear MPC", 
+        label=algo_name, 
         color=:blue, 
         xlabel="tr(Σ)", 
         ylabel="Frequency",
         legend=:topright)
+    vline!(p1, [sum(nonlinearMPC_cov)/num_simulations], label="Mean", color=:red, linestyle=:dash,linewidth=1.5)
 
     p2 = histogram(
         linearMPC_cov, 
         bins=bins_linear, 
-        label="linear MPC", 
+        label=nominal_name, 
         color=:green, 
         xlabel="tr(Σ)", 
         ylabel="Frequency",
         legend=:topright)
+    vline!(p2, [sum(linearMPC_cov)/num_simulations], label="Mean", color=:red, linestyle=:dash,linewidth=1.5)
 
-    plot_layout = @layout [a;b]
+
+    # plot_layout = @layout [a, b]
 
     plot(p1, p2,
-        layout=plot_layout, 
-        legend=:topright,
-        legendfontsize=7)
-    ylims!(0.0, 30)
+        layout=(1,2),
+        size=(650,250),
+        left_margin=5Plots.mm,
+        bottom_margin=5Plots.mm,
+        top_margin=5Plots.mm,
+        legendfontsize=fontSize-1)
+
+    ylims!(0.0, 25)
+
+
+    plot!(
+    framestyle = :box,
+    yguidefontsize = fontSize,
+    xguidefontsize = fontSize,
+    xlabelfontsize = fontSize,
+    ylabelfontsize = fontSize,
+    xtickfontsize = 8,
+    ytickfontsize = 8,
+    palette = :seaborn_muted,
+    foreground_color_legend = nothing,
+    legendfontsize=fontSize-1,
+    fontfamily = "Computer Modern");
     
     savefig("./covariance_trace.png")
 
@@ -296,5 +354,5 @@ end
 # histograms()
 # plot_OCV_SOC()
 compare_covariance_trace()
-compare_costs()
+# compare_costs()
 # compare_estimation_err()

@@ -27,15 +27,15 @@ function measurement_dynamics(SOC)
 
     # Li-ion from Wang et al. 2021,
     "Lithium-Ion Battery SOC Estimation Based on Adaptive Forgetting Factor Least Squares Online Identification and Unscented Kalman Filter"
-    OCV_Li = -43.1 * SOC[1]^6 + 155.4 * SOC[1]^5 - 215.7 * SOC[1]^4 + 146.6 * SOC[1]^3 - 50.16 * SOC[1]^2 + 8.674 * SOC[1] + 2.991
+    OCV_Li = -43.1 * SOC[1]^6 + 155.4 * SOC[1]^5 - 215.7 * SOC[1]^4 + 146.6 * SOC[1]^3 - 50.16 * SOC[1]^2 + 8.674 * SOC[1]
 
     # From Stroe et al. 2018
     "Influence of Battery Parametric Uncertainties on the State-of-Charge Estimation of Lithium Titanate Oxide-Based Batteries"
-    OCV_LTO = 2.0301 + 2.1737*SOC[2] - 13.65 * SOC[2]^2 + 31.77 * SOC[2]^3 + 39.06*SOC[2]^4 - 329.2*SOC[2]^5 + 632.1*SOC[2]^6 - 526.2*SOC[2]^7 + 164.8*SOC[2]^8 
+    OCV_LTO = 2.1737*SOC[2] - 13.65 * SOC[2]^2 + 31.77 * SOC[2]^3 + 39.06*SOC[2]^4 - 329.2*SOC[2]^5 + 632.1*SOC[2]^6 - 526.2*SOC[2]^7 + 164.8*SOC[2]^8 
 
     # From Propp et al. 2017
     "Kalman-variant estimators for state of charge in lithium-sulfur batteries"
-    OCV_LiS = 2.1 + 0.48*SOC[3] -8.36*SOC[3]^2 + 72.94*SOC[3]^3 - 364.76*SOC[3]^4 + 1107.76*SOC[3]^5 - 2066.02*SOC[3]^6 + 2291.23*SOC[3]^7 - 1372.71*SOC[3]^8 + 339.78*SOC[3]^9
+    OCV_LiS = 0.48*SOC[3] -8.36*SOC[3]^2 + 72.94*SOC[3]^3 - 364.76*SOC[3]^4 + 1107.76*SOC[3]^5 - 2066.02*SOC[3]^6 + 2291.23*SOC[3]^7 - 1372.71*SOC[3]^8 + 339.78*SOC[3]^9
 
    return [OCV_Li; OCV_LTO; OCV_LiS]
 end
@@ -126,9 +126,9 @@ nonlinear_problem = MPC_Prob(
     constraint_function
 )
 
-x₀₀ = ones(n)*0.05
+x₀₀ = ones(n)*0.1
 Σ₀₀ = 0.5 .* Matrix{Float64}(I, n, n)
-L = 35 # number of candidate trajectories
+L = 2 # number of candidate trajectories
 num_simulations = 100
 T = 50
 
@@ -154,13 +154,11 @@ function run_nonlinear_mpcs()
 
     for i in 1:num_simulations
         println("Simulation: ", i)
-        if i==num_simulations
-            @time begin
-            achieved_cost, achieved_est_err, X_rec, U_rec, Σ_rec, X_true_rec = simulation_run()
-            end
-        else
-            achieved_cost, achieved_est_err, X_rec, U_rec, Σ_rec, X_true_rec = simulation_run()
-        end
+
+        current_time = time()
+        achieved_cost, achieved_est_err, X_rec, U_rec, Σ_rec, X_true_rec = simulation_run()
+        println(time()-current_time)
+
         cost_rec[i] = achieved_cost
         est_err_rec[i] = achieved_est_err
         x_rec[i] = X_rec
@@ -194,7 +192,9 @@ function run_linear_mpcs()
     cov_rec_mpc = Vector{Vector{Matrix{Float64}}}(undef, num_simulations)
 
     for i in 1:num_simulations
+        current_time = time()
         achieved_cost, achieved_est_err, X_rec_mpc, U_rec_mpc, Σ_rec_mpc, X_true_rec_mpc = simulate_run_mpc()
+        println(time()-current_time)
         cost_rec_mpc[i] = achieved_cost
         est_err_rec_mpc[i] = achieved_est_err
         x_rec_mpc[i] = X_rec_mpc
