@@ -1,4 +1,4 @@
-using JuMP, Ipopt
+using JuMP, Clarabel
 
 mutable struct MPC_Prob
     f::Function # state dynamics
@@ -13,7 +13,7 @@ end
 
 function linear_mpc(x₀::Vector{Float64}, lin_prob::MPC_Prob)
 
-    model = Model(Ipopt.Optimizer)
+    model = Model(Clarabel.Optimizer)
     set_silent(model)
     @variable(model, x[1:lin_prob.n, 1:lin_prob.N])
     @variable(model, u[1:lin_prob.m, 1:lin_prob.N-1])
@@ -28,9 +28,7 @@ function linear_mpc(x₀::Vector{Float64}, lin_prob::MPC_Prob)
         x[:,t+1] .== lin_prob.f(x[:,t], u[:,t]))
     @constraint(model, 
         [t in 1:lin_prob.N-1], 
-        lin_prob.constraint_function(x[:,t], u[:,t]) .<= 0.0)
-    @constraint(model,
-        lin_prob.constraint_function(x[:,lin_prob.N], 0) .<= 0.0)
+        lin_prob.constraint_function(x[:,t+1], u[:,t]) .<= 0.0)
     
     # Find optimal solution
     optimize!(model)
@@ -42,44 +40,34 @@ function linear_mpc(x₀::Vector{Float64}, lin_prob::MPC_Prob)
     return optimal_u
 end
 
-function nonlinear_mpc(initial_state::Tuple{Vector{Float64}, Matrix{Float64}},
-                       prob::MPC_Prob, initial_u_guess::Matrix{Float64})
-    x₀₀, Σ₀₀ = initial_state
-    u₀ = initial_u_guess[:, 1]
+function nonlinear_mpc(prob::MPC_Prob, x₀₀::Vector{Float64}, Σ₀₀::Matrix{Float64})
     Σ₀₀_vec = vec(Σ₀₀)
-    γ = 1.0
     info_state0 = [x₀₀; Σ₀₀_vec]
-    info_state_rec = [info_state0 for _ in 1:prob.N]
-    A_full = ForwardDiff.jacobian(x -> prob.f(x, u₀), info_state0)
-    B_full = ForwardDiff.jacobian(u -> prob.f(info_state0, u), u₀)
-    As = [A_full for _ in 1:prob.N-1]
-    Bs = [B_full for _ in 1:prob.N-1]
-    for k in 1:prob.N-1
-        uₖ = initial_u_guess[:, k]
-        info_state_next = prob.f(info_state_rec[k], uₖ)
-        info_state_rec[k+1] = info_state_next
-        As[k] = ForwardDiff.jacobian(x -> prob.f(x, uₖ), info_state_rec[k])
-        Bs[k] = ForwardDiff.jacobian(u -> prob.f(info_state_rec[k], u), uₖ)
-    end
+    A_info = ForwardDiff.jacobian(x -> prob.f(x, zeros(prob.m)), info_state0)
+    B_info = ForwardDiff.jacobian(u -> prob.f(info_state0, u), zeros(prob.m))
+
     # Define the optimization problem
-    model = Model(Ipopt.Optimizer)
+    model = Model(Clarabel.Optimizer)
+    #set_optimizer_attribute(model, "tol_feas", 1e-6)
     #model = Model(MadNLP.Optimizer)
     #set_optimizer_attribute(model, "max_iter", 50)
     #set_optimizer_attribute(model, "constr_viol_tol", 1e-6)
-
     set_silent(model)
-    @variable(model, x[i = 1:prob.n+prob.n^2, t = 1:prob.N], start = info_state_rec[t][i])
-    @variable(model, u[i = 1:prob.m, t = 1:prob.N-1], start = initial_u_guess[i, t])
-    objective = sum(prob.runningcost(x[:,t], u[:,t]) for t in 1:prob.N-1) + prob.runningcost(x[:,prob.N], 0)
-    regularization = sum((u[i,t] - initial_u_guess[i, t])^2 for t in 1:prob.N-1 for i in 1:prob.m)
-    regularization += sum((x[i,t] - info_state_rec[t][i])^2 for t in 1:prob.N for i in 1:prob.n+prob.n^2)
-    @objective(model, Min, objective + γ * regularization)
+    @variable(model, x[i = 1:prob.n+prob.n^2, t = 1:prob.N])
+    @variable(model, u[i = 1:prob.m, t = 1:prob.N-1])
+    objective = sum(prob.runningcost(x[:,t], u[:,t]) for t in 1:prob.N-1) 
+                    + prob.runningcost(x[:,prob.N], 0)
+    @objective(model, Min, objective)
 
-    # Define the dynamics constraints
     @constraint(model, x[:,1] .== info_state0)
+    # New constraint to ensure positive definiteness of the covariance matrix
+    @constraint(model, Symmetric(reshape(x[prob.n+1:prob.n+prob.n^2, 1], prob.n, prob.n)) -
+        1e-6 * Matrix{Float64}(I, prob.n, prob.n) in PSDCone())
+    #@constraint(model, 
+    #    x[prob.n+1:prob.n+prob.n^2, 1] .>= 0.0)
     @constraint(model, 
         [t in 1:prob.N-1], 
-        x[:,t+1] .== As[t] * x[:,t] + Bs[t] * u[:,t])
+        x[:,t+1] .== A_info * x[:,t] .+ B_info * u[:,t])
 
     @constraint(model, 
         [t in 1:prob.N-1], 
@@ -89,8 +77,7 @@ function nonlinear_mpc(initial_state::Tuple{Vector{Float64}, Matrix{Float64}},
     # Find optimal solution
     optimize!(model)
     optimal_u = value.(u)
-    optimal_obj = value(objective)
     feasibility = (primal_status(model) == FEASIBLE_POINT)
     
-    return optimal_u, optimal_obj, feasibility
+    return optimal_u[:,1], feasibility
 end

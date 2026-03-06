@@ -2,7 +2,7 @@
 using Revise
 using Plots, LinearAlgebra
 using JLD2
-using JuMP, Ipopt, MadNLP
+using JuMP, Clarabel
 
 include("./src/eKF.jl")
 include("./src/MPCs.jl")
@@ -24,7 +24,6 @@ function state_dynamics(SOC, I)
 end
 
 function measurement_dynamics(SOC)
-
     # Li-ion from Wang et al. 2021,
     "Lithium-Ion Battery SOC Estimation Based on Adaptive Forgetting Factor Least Squares Online Identification and Unscented Kalman Filter"
     OCV_Li = -43.1 * SOC[1]^6 + 155.4 * SOC[1]^5 - 215.7 * SOC[1]^4 + 146.6 * SOC[1]^3 - 50.16 * SOC[1]^2 + 8.674 * SOC[1]
@@ -40,29 +39,24 @@ function measurement_dynamics(SOC)
    return [OCV_Li; OCV_LTO; OCV_LiS]
 end
 
-
-W = 0.1 * I(n) # process noise covariance
-V = 0.1 * I(d); # measurement noise covariance
-
-
+W = 0.05 * I(n) # process noise covariance
+V = 0.05 * I(d); # measurement noise covariance
 
 eKF = ExtendedKalmanFilter(state_dynamics, measurement_dynamics, W, V)
 
-N = 8 # prediction horizon length
+N = 10 # prediction horizon length
 Q = 1.0
 R = 0.1
-set_point = 1.0
-
+set_point = 1.5
 
 function running_cost(x, u)
     cost = Q * (sum(x) - set_point) ^ 2  + u' * R * u
     # penalize the difference between SOCs
     for i in 1:n
         for j in i+1:n
-            cost += (Q * (x[i] - x[j])^2)^2
+            cost += Q * (x[i] - x[j])^2
         end
     end
-
     return cost
 end
 
@@ -80,10 +74,9 @@ function running_cost_stochastic(info_state, u)
     return cost
 end
 
-
-
 function constraint_function(x, u)
-    u_max = 5.0
+    u_max = 0.5
+    x = x[1:n]
     return [-x; x .- 1; u .- u_max; -u .- u_max]
 end
 
@@ -98,22 +91,14 @@ linear_problem = MPC_Prob(
     constraint_function
 )
 
-
 function info_f(info_state, u₀)
     x₀₀ = info_state[1:n]
-    Σ₀₀ = info_state[n+1:end]
-    Σ₀₀ = reshape(Σ₀₀, n, n)
+    Σ₀₀_vec = info_state[n+1:end]
+    Σ₀₀ = reshape(Σ₀₀_vec, n, n)
     x₁₁, Σ₁₁ = update_predict(x₀₀, Σ₀₀, u₀, eKF)
     Σ₁₁ = vec(Σ₁₁)
     return [x₁₁; Σ₁₁]
 end
-
-function constraint_function_stochastic(x, u)
-    u_max = 5.0
-    x = x[1:n]
-    return [-x; x .- 1; u .- u_max; -u .- u_max]
-end
-
 
 
 nonlinear_problem = MPC_Prob(
@@ -128,15 +113,15 @@ nonlinear_problem = MPC_Prob(
 
 x₀₀ = ones(n)*0.1
 Σ₀₀ = 0.5 .* Matrix{Float64}(I, n, n)
-L = 2 # number of candidate trajectories
+L = 1 # number of candidate trajectories
 num_simulations = 100
 T = 50
 
 
 
 function simulation_run()
-    X_rec, U_rec, Σ_rec, X_true_rec = simulate_nonlinear_MPC(nonlinear_problem, linear_problem,
-                                                        x₀₀, Σ₀₀, T, L; u_noise_cov = 0.01)
+    X_rec, U_rec, Σ_rec, X_true_rec = simulate_nonlinear_MPC(nonlinear_problem,
+                                                        x₀₀, Σ₀₀, T)
     achieved_cost = sum([running_cost(X_true_rec[k], U_rec[k]) for k in 1:T]) / T
     achieved_est_err = sum([norm(X_rec[k] - X_true_rec[k]) for k in 1:T]) / T
     return achieved_cost, achieved_est_err, X_rec, U_rec, Σ_rec, X_true_rec
@@ -208,7 +193,7 @@ function run_linear_mpcs()
     return cost_rec_mpc, est_err_rec_mpc, x_rec_mpc, u_rec_mpc, x_true_rec_mpc, cov_rec_mpc
 end
 
-RUN_SIMS = false
+RUN_SIMS = true
 
 if RUN_SIMS
     println("Running nonlinear MPC simulations...")
@@ -221,7 +206,7 @@ if RUN_SIMS
 
     SAVE_DATA = true
     if SAVE_DATA
-        @save "simulation_results.jld2" x_rec u_rec cov_rec x_true_rec cost_rec est_err_rec x_rec_mpc u_rec_mpc cov_rec_mpc x_true_rec_mpc cost_rec_mpc est_err_rec_mpc
+        @save "simulation_results100.jld2" cov_rec cost_rec est_err_rec cov_rec_mpc cost_rec_mpc est_err_rec_mpc
     end
 end
 

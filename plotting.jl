@@ -2,48 +2,15 @@ using JLD2
 using Statistics
 using LaTeXStrings
 using Plots, LinearAlgebra
-@load "simulation_results100.jld2" x_rec u_rec cov_rec x_true_rec cost_rec est_err_rec x_rec_mpc u_rec_mpc cov_rec_mpc x_true_rec_mpc cost_rec_mpc est_err_rec_mpc
+@load "simulation_results100.jld2" cov_rec cost_rec est_err_rec cov_rec_mpc cost_rec_mpc est_err_rec_mpc
 
 ### Grab required parameters from main.jl
-num_simulations = length(x_rec)
-T = length(x_rec[1])
-n = length(x_rec[1][1])
-set_point = 1.0
-Q = 1.0
-R = 0.1
+num_simulations = length(cost_rec)
 
-function running_cost(x, u)
-    cost = Q * (sum(x) - set_point) ^ 2  + u' * R * u
-    # penalize the difference between SOCs
-    for i in 1:n
-        for j in i+1:n
-            cost += Q * (x[i] - x[j])^2
-        end
-    end
-    return cost
-end
-
-nonlinearMPC_cost = [sum(running_cost(x_true_rec[i][k],u_rec[i][k])/T for k in 1:T) for i in 1:num_simulations]
-linearMPC_cost = [sum(running_cost(x_true_rec_mpc[i][k],u_rec_mpc[i][k])/T for k in 1:T) for i in 1:num_simulations]
-
+nonlinearMPC_cost = cost_rec
+linearMPC_cost = cost_rec_mpc
 nonlinearMPC_cov = [sum(tr(cov_rec[i][k]) for k in 1:T)/T for i in 1:num_simulations]
 linearMPC_cov = [sum(tr(cov_rec_mpc[i][k]) for k in 1:T)/T for i in 1:num_simulations]
-
-function running_cost_stochastic(info_state, u)
-    x = info_state[1:n]
-    Σ = info_state[n+1:end]
-    Σ = reshape(Σ, n, n)
-    cost = running_cost(x, u) + Q * tr(Σ)
-    # penalize the difference between SOCs
-    for i in 1:n
-        for j in i+1:n
-            cost += Q * (Σ[i, i] - 2 * Σ[i, j] + Σ[j, j])
-        end
-    end
-    # cost += Q*sum((Σ .- Σ').^2)/2
-    return cost
-end
-
 
 
 algo_name = "Algorithm 1"
@@ -54,9 +21,6 @@ function histograms()
     # # Create a 2x2 layout for the subplots
     # nonlinearMPC_cost = [sum(running_cost(x_true_rec[i][k],u_rec[i][k]) for k in 1:T) for i in 1:num_simulations]
     # linearMPC_cost = [sum(running_cost(x_true_rec_mpc[i][k],u_rec_mpc[i][k]) for k in 1:T) for i in 1:num_simulations]
-
-    # nonlinearMPC_cov = [sum(tr(cov_rec[i][k]) for k in 1:T)/T for i in 1:num_simulations]
-    # linearMPC_cov = [sum(tr(cov_rec_mpc[i][k]) for k in 1:T)/T for i in 1:num_simulations]
 
     # Calculate means
     mean_nonlinearMPC_cov = sum(est_err_rec)/num_simulations
@@ -207,37 +171,6 @@ function plot_OCV_SOC()
 end
 
 
-function simulation_averaged_sum_of_states()
-    # Initialize vectors to store the average sum of states for each time step
-    avg_sum_states = zeros(T)
-    avg_sum_states_mpc = zeros(T)
-
-    # Loop over all simulations and compute the sum of states for each time step
-    for i in 1:num_simulations
-        for t in 1:T
-            # Accumulate the sum of states
-            avg_sum_states[t] += sum(x_true_rec[i][t])
-            avg_sum_states_mpc[t] += sum(x_true_rec_mpc[i][t])
-        end
-    end
-
-    # Divide by the number of simulations to get the average
-    avg_sum_states ./= num_simulations
-    avg_sum_states_mpc ./= num_simulations
-
-    # Plot the average sum of states across time
-    plot(1:T, avg_sum_states, 
-        xlabel="Time Step", 
-        ylabel="Average Sum of States", 
-        label="Stochastic Optimal Control", 
-        color=:blue)
-    plot!(1:T, avg_sum_states_mpc, 
-        label="Model Predictive Control", 
-        color=:green)
-
-    savefig("./average_sum_of_states.png")
-end
-
 function compare_covariance_trace()
 
     # nonlinearMPC_cov = [sum(tr(cov_rec[i][k]) for k in 1:T) for i in 1:num_simulations ] / (num_simulations * T)
@@ -342,17 +275,12 @@ function compare_costs()
 end
 
 function compare_estimation_err()
-
-    est_err_rec = [norm(x_rec[i][k] - x_true_rec[i][k]) for i in 1:num_simulations, k in 1:T]
-    est_err_rec_mpc = [norm(x_rec_mpc[i][k] - x_true_rec_mpc[i][k]) for i in 1:num_simulations, k in 1:T]
-
     println("Average Achieved Estimation Error Change: % ", (sum(est_err_rec) - sum(est_err_rec_mpc)) / sum(est_err_rec_mpc) * 100)
-
 end
 
 
-# histograms()
-# plot_OCV_SOC()
-compare_covariance_trace()
-# compare_costs()
-# compare_estimation_err()
+ histograms()
+ #plot_OCV_SOC()
+ #compare_covariance_trace()
+ compare_costs()
+ compare_estimation_err()
