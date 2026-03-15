@@ -11,15 +11,15 @@ mutable struct MPC_Prob
 end
 
 
-function linear_mpc(x₀::Vector{Float64}, lin_prob::MPC_Prob)
+function linear_mpc(x₀::Vector{Float64}, lin_prob::MPC_Prob, k::Int64)
 
     model = Model(Clarabel.Optimizer)
     set_silent(model)
     @variable(model, x[1:lin_prob.n, 1:lin_prob.N])
     @variable(model, u[1:lin_prob.m, 1:lin_prob.N-1])
     @objective(model, Min, 
-    sum(lin_prob.runningcost(x[:,t], u[:,t]) for t in 1:lin_prob.N-1)
-                                + lin_prob.runningcost(x[:,lin_prob.N], 0))
+    sum(lin_prob.runningcost(k + t - 1, x[:,t], u[:,t]) for t in 1:lin_prob.N-1)
+                                + lin_prob.runningcost(k + lin_prob.N - 1, x[:,lin_prob.N], 0))
 
     # Define the dynamics constraints
     @constraint(model, x[:,1] .== x₀)
@@ -40,7 +40,7 @@ function linear_mpc(x₀::Vector{Float64}, lin_prob::MPC_Prob)
     return optimal_u
 end
 
-function nonlinear_mpc(prob::MPC_Prob, x₀₀::Vector{Float64}, Σ₀₀::Matrix{Float64})
+function nonlinear_mpc(prob::MPC_Prob, x₀₀::Vector{Float64}, Σ₀₀::Matrix{Float64}, k::Int64)
     Σ₀₀_vec = vec(Σ₀₀)
     info_state0 = [x₀₀; Σ₀₀_vec]
     A_info = ForwardDiff.jacobian(x -> prob.f(x, zeros(prob.m)), info_state0)
@@ -55,8 +55,8 @@ function nonlinear_mpc(prob::MPC_Prob, x₀₀::Vector{Float64}, Σ₀₀::Matri
     set_silent(model)
     @variable(model, x[i = 1:prob.n+prob.n^2, t = 1:prob.N])
     @variable(model, u[i = 1:prob.m, t = 1:prob.N-1])
-    objective = sum(prob.runningcost(x[:,t], u[:,t]) for t in 1:prob.N-1) 
-                    + prob.runningcost(x[:,prob.N], 0)
+    objective = sum(prob.runningcost(k + t - 1, x[:,t], u[:,t]) for t in 1:prob.N-1) 
+                    + prob.runningcost(k + prob.N - 1, x[:,prob.N], 0)
     @objective(model, Min, objective)
 
     @constraint(model, x[:,1] .== info_state0)
