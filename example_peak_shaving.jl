@@ -16,6 +16,7 @@ V = 0.02 * I(d); # measurement noise covariance
 
 N = 8 # prediction horizon length
 Q = 1.0
+Q_uniformity = 0.2
 R = 0.1
 u_max = 0.5
 T = 50 # simulation length
@@ -60,11 +61,11 @@ end
 
 
 function running_cost(k, x, u)
-    cost = Q * (sum(x) - set_point(k)) ^ 2  + 0.0 * u' * R * u
+    cost = Q * (sum(x) - set_point(k)) ^ 2  + 1.0 * u' * R * u
     # penalize the difference between SOCs
     for i in 1:n
         for j in i+1:n
-            cost += 0.2 * Q * (x[i] - x[j])^2
+            cost += Q_uniformity * (x[i] - x[j])^2
         end
     end
     return cost
@@ -78,7 +79,7 @@ function running_cost_stochastic(k, info_state, u)
     # penalize the difference between SOCs
     for i in 1:n
         for j in i+1:n
-            cost += Q * (Σ[i, i] - 2 * Σ[i, j] + Σ[j, j])
+            cost += Q_uniformity * (Σ[i, i] - 2 * Σ[i, j] + Σ[j, j])
         end
     end
     return cost
